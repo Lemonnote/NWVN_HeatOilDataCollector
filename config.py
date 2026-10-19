@@ -46,6 +46,10 @@ def get_modbus_requests():
     """回傳 Modbus 請求列表"""
     return get_config().get('modbus_requests', [])
 
+def get_data_mapping():
+    """回傳資料欄位對應索引字典"""
+    return get_config().get('data_mapping', {})
+
 def get_sql_settings():
     """回傳 SQL Server 連線設定字典"""
     return get_config().get('sql_server', {})

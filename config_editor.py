@@ -36,6 +36,9 @@ def show_config():
     tcp = cfg.get('modbus_tcp', {})
     print(f"   主機       : {tcp.get('host', 'N/A')}")
     print(f"   埠號       : {tcp.get('port', 'N/A')}")
+    print(f"   Slave ID   : {tcp.get('slave_id', 'N/A')}")
+    print(f"   起始位址   : {tcp.get('start_address', 'N/A')}")
+    print(f"   暫存器數量 : {tcp.get('register_count', 'N/A')}")
     print("-" * 50)
     print(" Modbus RTU:")
     rtu = cfg.get('modbus_rtu', {})
@@ -44,6 +47,9 @@ def show_config():
     print(f"   資料位元   : {rtu.get('bytesize', 'N/A')}")
     print(f"   同位檢查   : {rtu.get('parity', 'N/A')}")
     print(f"   停止位元   : {rtu.get('stopbits', 'N/A')}")
+    print(f"   Slave ID   : {rtu.get('slave_id', 'N/A')}")
+    print(f"   起始位址   : {rtu.get('start_address', 'N/A')}")
+    print(f"   暫存器數量 : {rtu.get('register_count', 'N/A')}")
     print("-" * 50)
     print(" SQL Server:")
     sql = cfg.get('sql_server', {})
@@ -76,12 +82,36 @@ def update_config(args):
         cfg['modbus_tcp']['port'] = args.tcp_port
         updated = True
 
+    if args.tcp_slave_id is not None:
+        cfg['modbus_tcp']['slave_id'] = args.tcp_slave_id
+        updated = True
+
+    if args.tcp_start_address is not None:
+        cfg['modbus_tcp']['start_address'] = args.tcp_start_address
+        updated = True
+
+    if args.tcp_register_count is not None:
+        cfg['modbus_tcp']['register_count'] = args.tcp_register_count
+        updated = True
+
     if args.rtu_port is not None:
         cfg['modbus_rtu']['port'] = args.rtu_port
         updated = True
 
     if args.rtu_baudrate is not None:
         cfg['modbus_rtu']['baudrate'] = args.rtu_baudrate
+        updated = True
+
+    if args.rtu_slave_id is not None:
+        cfg['modbus_rtu']['slave_id'] = args.rtu_slave_id
+        updated = True
+
+    if args.rtu_start_address is not None:
+        cfg['modbus_rtu']['start_address'] = args.rtu_start_address
+        updated = True
+
+    if args.rtu_register_count is not None:
+        cfg['modbus_rtu']['register_count'] = args.rtu_register_count
         updated = True
 
     if args.sql_host is not None:
@@ -113,8 +143,14 @@ def main():
     parser.add_argument('--machine', help='設定機台名稱')
     parser.add_argument('--tcp-host', help='設定 TCP 主機 IP')
     parser.add_argument('--tcp-port', type=int, help='設定 TCP 埠號')
+    parser.add_argument('--tcp-slave-id', type=int, help='設定 TCP Slave ID')
+    parser.add_argument('--tcp-start-address', type=int, help='設定 TCP 起始位址')
+    parser.add_argument('--tcp-register-count', type=int, help='設定 TCP 暫存器數量')
     parser.add_argument('--rtu-port', help='設定 RTU 串口 (例如 COM1)')
     parser.add_argument('--rtu-baudrate', type=int, help='設定 RTU 鮑率')
+    parser.add_argument('--rtu-slave-id', type=int, help='設定 RTU Slave ID')
+    parser.add_argument('--rtu-start-address', type=int, help='設定 RTU 起始位址')
+    parser.add_argument('--rtu-register-count', type=int, help='設定 RTU 暫存器數量')
     parser.add_argument('--sql-host', help='設定 SQL Server 主機')
     parser.add_argument('--sql-database', help='設定 SQL 資料庫名稱')
     parser.add_argument('--sql-username', help='設定 SQL 使用者名稱')

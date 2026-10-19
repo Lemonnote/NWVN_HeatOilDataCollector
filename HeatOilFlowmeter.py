@@ -17,6 +17,7 @@ from config import (
     get_tcp_settings,
     get_rtu_settings,
     get_modbus_requests,
+    get_data_mapping,
     get_sql_settings,
     build_sql_connection_string,
 )
@@ -58,14 +59,31 @@ def parse_modbus_response(response_str):
     return parsed_values
 
 
-def parse_raw_request(hex_str):
-    """從原始 Modbus 十六進位請求解析 slave / function code / address / count"""
-    b = bytes.fromhex(hex_str.replace(' ', ''))
-    slave = b[0]
-    func_code = b[1]
-    address = (b[2] << 8) | b[3]
-    count = (b[4] << 8) | b[5]
-    return slave, func_code, address, count
+def calculate_crc(data):
+    """計算 Modbus RTU CRC-16 校驗碼 (0xA001 多項式)"""
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 0x0001:
+                crc = (crc >> 1) ^ 0xA001
+            else:
+                crc >>= 1
+    return crc.to_bytes(2, byteorder='little')
+
+
+def build_rtu_request(slave_id, func_code, start_address, register_count):
+    """組建 Modbus RTU 請求封包 (含 CRC)"""
+    request = bytes([
+        slave_id,
+        func_code,
+        (start_address >> 8) & 0xFF,
+        start_address & 0xFF,
+        (register_count >> 8) & 0xFF,
+        register_count & 0xFF
+    ])
+    crc = calculate_crc(request)
+    return request + crc
 
 
 def parse_registers_to_floats(registers):
@@ -109,26 +127,23 @@ def send_and_receive_tcp(client, requests, response_queue):
         response_queue.put(None)
 
 
-def send_and_receive_rtu(client, requests, response_queue):
-    """使用 pymodbus API 發送 RTU 請求並讀取回應"""
+def send_and_receive_rtu(client, slave_id, start_address, register_count, response_queue):
+    """發送 Modbus RTU 請求並讀取回應 (使用 pymodbus API)"""
     try:
-        for req in requests:
-            slave, func_code, address, count = parse_raw_request(req)
-            print(f"發送 RTU 請求: slave={slave}, func={func_code}, addr={address}, count={count}")
-            result = client.read_holding_registers(
-                address=address,
-                count=count,
-                slave=slave
-            )
-            if result.isError():
-                print(f"RTU 回應錯誤: {result}")
-                response_queue.put(None)
-                break
-            parsed_values = parse_registers_to_floats(result.registers)
-            print(f"解析後的值: {parsed_values}")
-            response_queue.put(parsed_values)
-            data_received.set()
-            time.sleep(1)
+        print(f"發送 RTU 請求: slave={slave_id}, addr={start_address}, count={register_count}")
+        result = client.read_holding_registers(
+            address=start_address,
+            count=register_count,
+            slave=slave_id
+        )
+        if result.isError():
+            print(f"RTU 回應錯誤: {result}")
+            response_queue.put(None)
+            return
+        parsed_values = parse_registers_to_floats(result.registers)
+        print(f"解析後的值: {parsed_values}")
+        response_queue.put(parsed_values)
+        data_received.set()
     except Exception as e:
         print(f"RTU 通訊時發生錯誤: {e}")
     finally:
@@ -176,69 +191,87 @@ def create_modbus_client(mode=None):
     return client, mode
 
 
+def build_data_row(parsed_values, machine_name):
+    """根據設定檔 data_mapping 從解析後的 float list 組建資料字典"""
+    mapping = get_data_mapping()
+
+    idx_supply = mapping.get('oil_supply_temp_index', 0)
+    idx_return = mapping.get('oil_return_temp_index', 1)
+    idx_flow = mapping.get('realtime_flow_index', 3)
+    idx_total = mapping.get('total_flow_index', 6)
+    idx_heat = mapping.get('realtime_heat_index', 13)
+    idx_total_heat = mapping.get('total_heat_index', 14)
+
+    def safe_get(values, index):
+        if index is None or index < 0 or index >= len(values):
+            return None
+        return values[index]
+
+    return {
+        "Machine": machine_name,
+        "OilSupplyTemperature": safe_get(parsed_values, idx_supply),
+        "OilReturnTemperature": safe_get(parsed_values, idx_return),
+        "RealTimeFlow": safe_get(parsed_values, idx_flow),
+        "TotalFlowVolume": safe_get(parsed_values, idx_total),
+        "RealTimeHeatValue": safe_get(parsed_values, idx_heat),
+        "TotalHeatValue": safe_get(parsed_values, idx_total_heat),
+        "CreateTime": datetime.now()
+    }
+
+
 def main(requests=None):
     cfg = get_config()
     machine_name = get_machine_name()
     mode = get_modbus_mode()
 
-    if requests is None:
-        requests = get_modbus_requests()
-
     client, mode = create_modbus_client(mode)
 
     try:
-        if client.connect():
-            print(f"成功連接 (模式: {mode.upper()})。")
-
-            # 去除請求中的空格
-            cleaned_requests = [request.replace(' ', '') for request in requests]
-
-            # 創建隊列來在線程之間傳遞數據
-            response_queue = Queue()
-
-            if mode == 'rtu':
-                # RTU 模式: 同步執行 (pymodbus 本身已經處理封包)
-                send_and_receive_rtu(client, cleaned_requests, response_queue)
-            else:
-                # TCP 模式: 使用線程 (原始 socket 方式)
-                tcp_thread = threading.Thread(target=send_and_receive_tcp, args=(client, cleaned_requests, response_queue))
-                tcp_thread.start()
-                data_received.wait(timeout=30)
-                tcp_thread.join(timeout=5)
-
-            # 處理接收到的數據
-            all_data = []
-            while not response_queue.empty():
-                parsed_values = response_queue.get()
-                if parsed_values is None:
-                    break
-                # 構建數據行
-                if len(parsed_values) >= 15:
-                    data_row = {
-                        "Machine": machine_name,
-                        "OilSupplyTemperature": parsed_values[0],
-                        "OilReturnTemperature": parsed_values[1],
-                        "RealTimeFlow": parsed_values[3],
-                        "TotalFlowVolume": parsed_values[6],
-                        "RealTimeHeatValue": parsed_values[13],
-                        "TotalHeatValue": parsed_values[14],
-                        "CreateTime": datetime.now()
-                    }
-                    all_data.append(data_row)
-            
-            # 創建數據框並上傳到 SQL Server
-            if all_data:
-                df = pd.DataFrame(all_data)
-                upload_to_sql_server(df)
-        else:
+        if not client.connect():
             print("連接失敗。")
+            return
+
+        print(f"成功連接 (模式: {mode.upper()})。")
+        response_queue = Queue()
+
+        if mode == 'rtu':
+            rtu = get_rtu_settings()
+            slave_id = rtu.get('slave_id', 1)
+            start_address = rtu.get('start_address', 7)
+            register_count = rtu.get('register_count', 60)
+            send_and_receive_rtu(client, slave_id, start_address, register_count, response_queue)
+        else:
+            if requests is None:
+                requests = get_modbus_requests()
+            cleaned_requests = [request.replace(' ', '') for request in requests]
+            tcp_thread = threading.Thread(
+                target=send_and_receive_tcp,
+                args=(client, cleaned_requests, response_queue)
+            )
+            tcp_thread.start()
+            data_received.wait(timeout=30)
+            tcp_thread.join(timeout=5)
+
+        # 處理接收到的數據
+        all_data = []
+        while not response_queue.empty():
+            parsed_values = response_queue.get()
+            if parsed_values is None:
+                break
+            data_row = build_data_row(parsed_values, machine_name)
+            all_data.append(data_row)
+        
+        if all_data:
+            df = pd.DataFrame(all_data)
+            upload_to_sql_server(df)
+        else:
+            print("未收到任何有效數據。")
 
     except ModbusException as e:
         print(f"Modbus 異常: {e}")
     except Exception as e:
         print(f"發生錯誤: {e}")
     finally:
-        # 斷開連接
         client.close()
         print("程式結束。")
 
