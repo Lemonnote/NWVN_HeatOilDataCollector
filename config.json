@@ -1,0 +1,25 @@
+{
+    "machine_name": "F01",
+    "modbus_mode": "tcp",
+    "modbus_tcp": {
+        "host": "192.168.24.19",
+        "port": 10123
+    },
+    "modbus_rtu": {
+        "port": "COM1",
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1
+    },
+    "modbus_requests": [
+        "01 03 00 07 00 3C F4 1A"
+    ],
+    "sql_server": {
+        "host": "192.168.24.170",
+        "database": "BatchDyeingCentral",
+        "username": "spc",
+        "password": "84160206",
+        "driver": "ODBC Driver 17 for SQL Server"
+    }
+}
